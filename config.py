@@ -10,7 +10,7 @@ def _require(key: str) -> str:
     val = os.getenv(key)
     if not val:
         raise EnvironmentError(
-            f"Required environment variable '{key}' is not set. "
+            f"Required environment variable '{key}' is not set.\n"
             f"Copy .env.example to .env and fill in your keys."
         )
     return val
@@ -18,7 +18,7 @@ def _require(key: str) -> str:
 
 class Config:
     DGIS_API_KEY: str = _require("DGIS_API_KEY")
-    GOOGLE_SA_JSON: str = os.getenv("GOOGLE_SA_JSON", "service_account.json")
+    GOOGLE_OAUTH_JSON: str = os.getenv("GOOGLE_OAUTH_JSON", "oauth_credentials.json")
     SHEET_ID: str = os.getenv("SHEET_ID", "")
     SHEET_NAME: str = os.getenv("SHEET_NAME", "Parking Almaty")
     MAX_PAGES: int = int(os.getenv("MAX_PAGES", "5"))
