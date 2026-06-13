@@ -28,10 +28,6 @@ def _safe(d: dict, *keys, default=""):
     return cur if cur is not None else default
 
 
-def _na(value: str) -> str:
-    return value if value and value.strip() else NA
-
-
 def _format_schedule(schedule: dict) -> str:
     if not schedule:
         return NA
@@ -90,6 +86,15 @@ def _extract_tariff_and_paid(item: dict) -> tuple[str, str]:
     return tariff_text or NA, paid_status or NA
 
 
+def _extract_phone_from_contact_groups(contact_groups: list) -> str:
+    """Return first phone number found in a contact_groups list."""
+    for group in contact_groups or []:
+        for contact in group.get("contacts") or []:
+            if contact.get("type") == "phone" and contact.get("value"):
+                return contact["value"]
+    return ""
+
+
 def _infer_type(item: dict, org_name: str) -> str:
     name = (item.get("name") or "").lower()
     full_name = (item.get("full_name") or "").lower()
@@ -123,7 +128,6 @@ def transform(item: dict) -> dict:
     schedule = item.get("schedule") or {}
     org = item.get("org") or {}
     org_name = org.get("name") or ""
-    org_id = str(org.get("id") or "")  # stored as _org_id, stripped before writing
 
     tariff, paid = _extract_tariff_and_paid(item)
     capacity = _extract_capacity(item)
@@ -133,6 +137,7 @@ def transform(item: dict) -> dict:
     lon = point.get("lon") or ""
     coords = f"{lat}, {lon}" if lat and lon else NA
 
+    # District: prefer 2GIS address component, fall back to polygon lookup
     address_components = address_obj.get("components") or []
     district = ""
     for comp in address_components:
@@ -146,6 +151,12 @@ def transform(item: dict) -> dict:
             district = ""
     district = district or NA
 
+    # Phone: try parking's own contacts first, then org's contacts
+    phone = _extract_phone_from_contact_groups(item.get("contact_groups"))
+    if not phone:
+        phone = _extract_phone_from_contact_groups(org.get("contact_groups"))
+    phone = phone or NA
+
     return {
         "id": str(item.get("id", "")),
         "название": item.get("name") or NA,
@@ -158,11 +169,9 @@ def transform(item: dict) -> dict:
         "тип": _infer_type(item, org_name),
         "объект": org_name or NA,
         "часы_работы": _format_schedule(schedule),
-        "телефон": NA,           # placeholder; filled by scraper.py enrichment step
+        "телефон": phone,
         "район": district,
         "дата_сбора": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        # Internal field — used for enrichment, NOT written to sheet
-        "_org_id": org_id,
     }
 
 

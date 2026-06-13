@@ -14,8 +14,7 @@ from config import cfg
 log = logging.getLogger(__name__)
 
 BASE_URL = "https://catalog.api.2gis.com/3.0/items"
-BYID_URL = "https://catalog.api.2gis.com/3.0/items/byid"
-REGION_ID = "67"  # Almaty — verified via /2.0/region/search?q=Алматы
+REGION_ID = "67"  # Almaty
 
 SEARCH_QUERIES = [
     "парковка",
@@ -62,38 +61,14 @@ class DGisClient:
             "fields": (
                 "items.id,items.name,items.full_name,items.address,"
                 "items.point,items.url,items.schedule,items.contact_groups,"
-                "items.rubrics,items.attribute_groups,items.org,"
-                "items.ads.options,items.capacity"
+                "items.rubrics,items.attribute_groups,items.capacity,"
+                "items.org,items.org.contact_groups"
             ),
             "key": cfg.DGIS_API_KEY,
         }
         resp = self.session.get(BASE_URL, params=params, timeout=15)
         resp.raise_for_status()
         return resp.json()
-
-    def fetch_org_phone(self, org_id: str) -> str:
-        """Fetch the first phone number for a parent org by its 2GIS ID.
-        Returns empty string if not found or on any error.
-        """
-        self._throttle()
-        try:
-            params = {
-                "id": org_id,
-                "fields": "items.contact_groups",
-                "key": cfg.DGIS_API_KEY,
-            }
-            resp = self.session.get(BYID_URL, params=params, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
-            items = data.get("result", {}).get("items", [])
-            for item in items:
-                for group in item.get("contact_groups") or []:
-                    for contact in group.get("contacts") or []:
-                        if contact.get("type") == "phone" and contact.get("value"):
-                            return contact["value"]
-        except Exception as exc:
-            log.debug("fetch_org_phone failed for org_id=%s: %s", org_id, exc)
-        return ""
 
     def iter_places(self, query: str) -> Iterator[dict]:
         """Yield raw place dicts for a given query, up to MAX_PAGES."""
@@ -113,8 +88,7 @@ class DGisClient:
             log.debug("Fetched %d items (query=%r, page=%d)", len(items), query, page)
 
             total = data.get("result", {}).get("total", 0)
-            fetched_so_far = page * 10
-            if fetched_so_far >= total:
+            if page * 10 >= total:
                 break
 
     def collect_all(self) -> list[dict]:
