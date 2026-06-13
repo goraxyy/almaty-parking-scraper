@@ -60,9 +60,9 @@ class DGisClient:
             "page_size": 10,
             "fields": (
                 "items.id,items.name,items.full_name,items.address,"
-                "items.point,items.url,items.schedule,items.contact_groups,"
+                "items.point,items.url,items.schedule,"
                 "items.rubrics,items.attribute_groups,items.capacity,"
-                "items.org,items.org.contact_groups"
+                "items.org"
             ),
             "key": cfg.DGIS_API_KEY,
         }

@@ -45,14 +45,10 @@ def main():
     records = [r for r in records if r.get("название") != "н/д" or r.get("адрес") != "н/д"]
     log.info("After garbage filter: %d records.", len(records))
 
-    # Step 5: Log phone fill rate
-    filled = sum(1 for r in records if r.get("телефон") != "н/д")
-    log.info("Phone numbers found: %d/%d records.", filled, len(records))
-
-    # Step 6: Sort by district then name
+    # Step 5: Sort by district then name
     records.sort(key=lambda r: (r.get("район", ""), r.get("название", "")))
 
-    # Step 7: Write to Google Sheets
+    # Step 6: Write to Google Sheets
     sheets = SheetsClient()
     sheets.write(records)
 
