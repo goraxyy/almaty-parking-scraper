@@ -63,10 +63,23 @@ def _extract_contacts(contact_groups: list) -> tuple[str, str]:
     return ", ".join(phones[:2]), websites[0] if websites else ""
 
 
+def _extract_capacity(item: dict) -> str:
+    """Extract total capacity as a clean number string."""
+    cap = item.get("capacity")
+    if not cap:
+        return ""
+    # capacity can be a dict like {"total": "200", "special_spaces": [...]}
+    if isinstance(cap, dict):
+        total = cap.get("total") or cap.get("count") or ""
+        return str(total) if total else ""
+    # Or it might already be a plain number/string
+    return str(cap)
+
+
 def _extract_tariff_and_paid(item: dict) -> tuple[str, str]:
     """Try to extract tariff info and paid/free status from attribute groups."""
     tariff_text = ""
-    paid_status = "Unknown"
+    paid_status = "н/д"  # н/д instead of Unknown
 
     for group in item.get("attribute_groups", []) or []:
         for attr in group.get("attributes", []) or []:
@@ -88,7 +101,7 @@ def _extract_tariff_and_paid(item: dict) -> tuple[str, str]:
 
     # Fallback: check name/description
     name_str = item.get("name", "") or ""
-    if paid_status == "Unknown":
+    if paid_status == "н/д":
         if _FREE_KW.search(name_str):
             paid_status = "Бесплатная"
         elif _PAID_KW.search(name_str):
@@ -107,16 +120,27 @@ def _infer_type(item: dict, org_name: str) -> str:
     combined = f"{name} {full_name} {rubrics} {org_name.lower()}"
 
     if _UNDERGROUND_KW.search(combined):
-        return "underground"
+        return "Подземная"
     if _MALL_KW.search(combined):
-        return "mall"
+        return "ТРЦ"
     if _BC_KW.search(combined):
-        return "business_center"
-    # Standalone lots near roads/streets tend to be city lots
+        return "БЦ"
     address = (item.get("address") or {}).get("name", "").lower()
     if any(kw in address for kw in ("ул.", "пр.", "бул.", "пер.")):
-        return "city"
-    return "private"
+        return "Городская"
+    return "Частная"
+
+
+def _build_url(item: dict) -> str:
+    """Build a working 2GIS Almaty deep link for the place."""
+    dgis_url = item.get("url") or ""
+    if dgis_url:
+        # Ensure it uses the kz domain
+        return dgis_url.replace("2gis.com", "2gis.kz").replace("2gis.ru", "2gis.kz")
+    item_id = item.get("id", "")
+    if item_id:
+        return f"https://2gis.kz/almaty/firm/{item_id}"
+    return ""
 
 
 def transform(item: dict) -> dict:
@@ -130,12 +154,8 @@ def transform(item: dict) -> dict:
 
     tariff, paid = _extract_tariff_and_paid(item)
     phone, website = _extract_contacts(contacts)
-
-    # Build 2GIS URL: prefer API-provided url, else construct from id
-    dgis_url = item.get("url") or ""
-    if not dgis_url:
-        item_id = item.get("id", "")
-        dgis_url = f"https://2gis.kz/almaty/search/парковка?id={item_id}"
+    capacity = _extract_capacity(item)
+    dgis_url = _build_url(item)
 
     # District from address structure
     address_components = address_obj.get("components") or []
@@ -146,29 +166,38 @@ def transform(item: dict) -> dict:
             break
 
     parking_type = _infer_type(item, org_name)
+    lat = point.get("lat") or ""
+    lon = point.get("lon") or ""
+    coords = f"{lat}, {lon}" if lat and lon else ""
 
     return {
         "id": str(item.get("id", "")),
-        "name": item.get("name") or "",
-        "address": address_obj.get("name") or "",
-        "lat": point.get("lat") or "",
-        "lon": point.get("lon") or "",
-        "dgis_url": dgis_url,
-        "paid": paid,
-        "tariff": tariff,
-        "capacity": str(item.get("capacity") or ""),
-        "type": parking_type,
-        "belongs_to": org_name,
-        "hours": _format_schedule(schedule),
-        "phone": phone,
-        "website": website,
-        "district": district,
-        "scraped_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "название": item.get("name") or "",
+        "адрес": address_obj.get("name") or "",
+        "координаты": coords,
+        "ссылка_2гис": dgis_url,
+        "платная": paid,
+        "тариф": tariff,
+        "мест_всего": capacity,
+        "тип": parking_type,
+        "объект": org_name,
+        "часы_работы": _format_schedule(schedule),
+        "телефон": phone,
+        "сайт": website,
+        "район": district,
+        "дата_сбора": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 
 
 HEADERS = [
-    "id", "name", "address", "lat", "lon", "dgis_url",
-    "paid", "tariff", "capacity", "type", "belongs_to",
-    "hours", "phone", "website", "district", "scraped_at",
+    "id", "название", "адрес", "координаты", "ссылка_2гис",
+    "платная", "тариф", "мест_всего", "тип", "объект",
+    "часы_работы", "телефон", "сайт", "район", "дата_сбора",
+]
+
+# Human-readable Russian column titles for the sheet header row
+HEADER_LABELS = [
+    "ID", "Название", "Адрес", "Координаты", "Ссылка на 2ГИС",
+    "Платная?", "Тариф", "Мест (всего)", "Тип", "Объект / организация",
+    "Часы работы", "Телефон", "Сайт", "Район", "Дата сбора",
 ]
