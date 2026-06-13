@@ -4,6 +4,8 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
+from district_lookup import lookup_district
+
 # Keywords used to infer parking type from name / organisation / rubrics.
 _MALL_KW = re.compile(
     r"\b(ТРЦ|ТРК|ТД|торг|mall|mega|MEGA|megalopolis|апорт|forum|esentai|dostyk)",
@@ -15,9 +17,10 @@ _PAID_KW = re.compile(r"(платн|оплат|pay|paid|тариф)", re.IGNOREC
 _FREE_KW = re.compile(r"(бесплатн|free|свободн)", re.IGNORECASE)
 _TARIFF_RE = re.compile(r"(\d[\d\s]*(?:₸|тг|tenge|руб)[^\n,;]{0,40})", re.IGNORECASE)
 
+NA = "н/д"  # Standard not-available marker used across all fields
+
 
 def _safe(d: dict, *keys, default=""):
-    """Safely traverse nested dict."""
     cur: Any = d
     for k in keys:
         if not isinstance(cur, dict):
@@ -26,10 +29,14 @@ def _safe(d: dict, *keys, default=""):
     return cur if cur is not None else default
 
 
+def _na(value: str) -> str:
+    """Return value if non-empty, else NA marker."""
+    return value if value and value.strip() else NA
+
+
 def _format_schedule(schedule: dict) -> str:
-    """Convert 2GIS schedule object to human-readable string."""
     if not schedule:
-        return ""
+        return NA
     if schedule.get("is_24x7"):
         return "24/7"
     days_map = {
@@ -46,11 +53,10 @@ def _format_schedule(schedule: dict) -> str:
                     f"{wh.get('from', '')}–{wh.get('to', '')}" for wh in working_hours
                 )
                 parts.append(f"{rus} {times}")
-    return "; ".join(parts) if parts else ""
+    return "; ".join(parts) if parts else NA
 
 
 def _extract_contacts(contact_groups: list) -> tuple[str, str]:
-    """Return (phone, website) from contact_groups list."""
     phones, websites = [], []
     for group in contact_groups or []:
         for contact in group.get("contacts", []):
@@ -60,26 +66,25 @@ def _extract_contacts(contact_groups: list) -> tuple[str, str]:
                 phones.append(value)
             elif ctype in ("website", "url") and value:
                 websites.append(value)
-    return ", ".join(phones[:2]), websites[0] if websites else ""
+    return (
+        ", ".join(phones[:2]) or NA,
+        websites[0] if websites else NA,
+    )
 
 
 def _extract_capacity(item: dict) -> str:
-    """Extract total capacity as a clean number string."""
     cap = item.get("capacity")
     if not cap:
-        return ""
-    # capacity can be a dict like {"total": "200", "special_spaces": [...]}
+        return NA
     if isinstance(cap, dict):
         total = cap.get("total") or cap.get("count") or ""
-        return str(total) if total else ""
-    # Or it might already be a plain number/string
-    return str(cap)
+        return str(total) if total else NA
+    return str(cap) if str(cap).strip() else NA
 
 
 def _extract_tariff_and_paid(item: dict) -> tuple[str, str]:
-    """Try to extract tariff info and paid/free status from attribute groups."""
     tariff_text = ""
-    paid_status = "н/д"  # н/д instead of Unknown
+    paid_status = ""
 
     for group in item.get("attribute_groups", []) or []:
         for attr in group.get("attributes", []) or []:
@@ -89,29 +94,25 @@ def _extract_tariff_and_paid(item: dict) -> tuple[str, str]:
 
             if "тариф" in name or "стоимость" in name or "цена" in name or "price" in name:
                 tariff_text = value
-
             if _PAID_KW.search(combined):
                 paid_status = "Платная"
             if _FREE_KW.search(combined):
                 paid_status = "Бесплатная"
-
             tariff_match = _TARIFF_RE.search(combined)
             if tariff_match and not tariff_text:
                 tariff_text = tariff_match.group(1).strip()
 
-    # Fallback: check name/description
     name_str = item.get("name", "") or ""
-    if paid_status == "н/д":
+    if not paid_status:
         if _FREE_KW.search(name_str):
             paid_status = "Бесплатная"
         elif _PAID_KW.search(name_str):
             paid_status = "Платная"
 
-    return tariff_text, paid_status
+    return tariff_text or NA, paid_status or NA
 
 
 def _infer_type(item: dict, org_name: str) -> str:
-    """Infer parking type from rubrics, name, and parent organisation."""
     name = (item.get("name") or "").lower()
     full_name = (item.get("full_name") or "").lower()
     rubrics = " ".join(
@@ -132,19 +133,16 @@ def _infer_type(item: dict, org_name: str) -> str:
 
 
 def _build_url(item: dict) -> str:
-    """Build a working 2GIS Almaty deep link for the place."""
     dgis_url = item.get("url") or ""
     if dgis_url:
-        # Ensure it uses the kz domain
         return dgis_url.replace("2gis.com", "2gis.kz").replace("2gis.ru", "2gis.kz")
     item_id = item.get("id", "")
     if item_id:
         return f"https://2gis.kz/almaty/firm/{item_id}"
-    return ""
+    return NA
 
 
 def transform(item: dict) -> dict:
-    """Convert one raw 2GIS item into a clean parking record dict."""
     point = item.get("point") or {}
     address_obj = item.get("address") or {}
     schedule = item.get("schedule") or {}
@@ -157,30 +155,39 @@ def transform(item: dict) -> dict:
     capacity = _extract_capacity(item)
     dgis_url = _build_url(item)
 
-    # District from address structure
+    lat = point.get("lat") or ""
+    lon = point.get("lon") or ""
+    coords = f"{lat}, {lon}" if lat and lon else NA
+
+    # District: prefer 2GIS address component, fall back to polygon lookup
     address_components = address_obj.get("components") or []
     district = ""
     for comp in address_components:
         if comp.get("type") in ("district", "division"):
             district = comp.get("street") or comp.get("name") or ""
             break
+    if not district and lat and lon:
+        try:
+            district = lookup_district(float(lat), float(lon))
+        except (ValueError, TypeError):
+            district = ""
+    district = district or NA
 
+    address_str = address_obj.get("name") or NA
+    org_name_out = org_name or NA
     parking_type = _infer_type(item, org_name)
-    lat = point.get("lat") or ""
-    lon = point.get("lon") or ""
-    coords = f"{lat}, {lon}" if lat and lon else ""
 
     return {
         "id": str(item.get("id", "")),
-        "название": item.get("name") or "",
-        "адрес": address_obj.get("name") or "",
+        "название": item.get("name") or NA,
+        "адрес": address_str,
         "координаты": coords,
         "ссылка_2гис": dgis_url,
         "платная": paid,
         "тариф": tariff,
         "мест_всего": capacity,
         "тип": parking_type,
-        "объект": org_name,
+        "объект": org_name_out,
         "часы_работы": _format_schedule(schedule),
         "телефон": phone,
         "сайт": website,
@@ -195,7 +202,6 @@ HEADERS = [
     "часы_работы", "телефон", "сайт", "район", "дата_сбора",
 ]
 
-# Human-readable Russian column titles for the sheet header row
 HEADER_LABELS = [
     "ID", "Название", "Адрес", "Координаты", "Ссылка на 2ГИС",
     "Платная?", "Тариф", "Мест (всего)", "Тип", "Объект / организация",
