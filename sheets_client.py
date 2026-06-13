@@ -7,6 +7,7 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 from config import cfg
 from transformer import HEADERS, HEADER_LABELS
@@ -35,6 +36,17 @@ def _get_credentials() -> Credentials:
         with open(TOKEN_FILE, "w") as fh:
             fh.write(creds.to_json())
     return creds
+
+
+def _batch(sheets_api, spreadsheet_id: str, requests: list):
+    """Send a single batchUpdate request, logging on failure but not crashing."""
+    try:
+        sheets_api.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={"requests": requests},
+        ).execute()
+    except HttpError as exc:
+        log.warning("batchUpdate failed (non-fatal): %s", exc)
 
 
 class SheetsClient:
@@ -80,7 +92,7 @@ class SheetsClient:
         return resp["replies"][0]["addSheet"]["properties"]["sheetId"]
 
     def _remove_bandings(self, tab_id: int):
-        """Delete any existing banded ranges on this tab (prevents 500 on re-run)."""
+        """Delete any existing banded ranges on this tab."""
         meta = (
             self.sheets.spreadsheets()
             .get(spreadsheetId=self.sheet_id)
@@ -88,121 +100,114 @@ class SheetsClient:
         )
         for s in meta.get("sheets", []):
             if s["properties"]["sheetId"] == tab_id:
-                banded = s.get("bandedRanges", [])
-                if banded:
-                    requests = [
+                for b in s.get("bandedRanges", []):
+                    _batch(self.sheets, self.sheet_id, [
                         {"deleteBanding": {"bandedRangeId": b["bandedRangeId"]}}
-                        for b in banded
-                    ]
-                    self.sheets.spreadsheets().batchUpdate(
-                        spreadsheetId=self.sheet_id,
-                        body={"requests": requests},
-                    ).execute()
+                    ])
                 break
 
     def _apply_formatting(self, tab_id: int, num_rows: int):
-        """Apply header colours, freeze, auto-resize, alternating row shading."""
-        # Must remove old banding first or Google returns 500 on addBanding
+        """Apply formatting one request at a time so failures are non-fatal."""
         self._remove_bandings(tab_id)
-
         num_cols = len(HEADERS)
-        requests = [
-            # 1. Freeze row 1
-            {
-                "updateSheetProperties": {
-                    "properties": {
-                        "sheetId": tab_id,
-                        "gridProperties": {"frozenRowCount": 1},
-                    },
-                    "fields": "gridProperties.frozenRowCount",
-                }
-            },
-            # 2. Header row — dark navy background, white bold text
-            {
-                "repeatCell": {
-                    "range": {
-                        "sheetId": tab_id,
-                        "startRowIndex": 0, "endRowIndex": 1,
-                        "startColumnIndex": 0, "endColumnIndex": num_cols,
-                    },
-                    "cell": {
-                        "userEnteredFormat": {
-                            "backgroundColor": {"red": 0.13, "green": 0.29, "blue": 0.45},
-                            "textFormat": {
-                                "bold": True,
-                                "foregroundColor": {"red": 1.0, "green": 1.0, "blue": 1.0},
-                                "fontSize": 10,
-                            },
-                            "verticalAlignment": "MIDDLE",
-                            "horizontalAlignment": "CENTER",
-                            "wrapStrategy": "CLIP",
-                        }
-                    },
-                    "fields": "userEnteredFormat",
-                }
-            },
-            # 3. Alternating row shading (white / light blue)
-            {
-                "addBanding": {
-                    "bandedRange": {
-                        "range": {
-                            "sheetId": tab_id,
-                            "startRowIndex": 1, "endRowIndex": num_rows + 1,
-                            "startColumnIndex": 0, "endColumnIndex": num_cols,
+
+        # 1. Freeze row 1
+        _batch(self.sheets, self.sheet_id, [{
+            "updateSheetProperties": {
+                "properties": {
+                    "sheetId": tab_id,
+                    "gridProperties": {"frozenRowCount": 1},
+                },
+                "fields": "gridProperties.frozenRowCount",
+            }
+        }])
+
+        # 2. Header row — dark navy + white bold text
+        _batch(self.sheets, self.sheet_id, [{
+            "repeatCell": {
+                "range": {
+                    "sheetId": tab_id,
+                    "startRowIndex": 0, "endRowIndex": 1,
+                    "startColumnIndex": 0, "endColumnIndex": num_cols,
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "backgroundColor": {"red": 0.13, "green": 0.29, "blue": 0.45},
+                        "textFormat": {
+                            "bold": True,
+                            "foregroundColor": {"red": 1.0, "green": 1.0, "blue": 1.0},
+                            "fontSize": 10,
                         },
-                        "rowProperties": {
-                            "firstBandColor": {"red": 1.0, "green": 1.0, "blue": 1.0},
-                            "secondBandColor": {"red": 0.91, "green": 0.95, "blue": 0.99},
-                        },
+                        "verticalAlignment": "MIDDLE",
+                        "horizontalAlignment": "CENTER",
+                        "wrapStrategy": "CLIP",
                     }
-                }
-            },
-            # 4. Auto-resize all columns
-            {
-                "autoResizeDimensions": {
-                    "dimensions": {
-                        "sheetId": tab_id,
-                        "dimension": "COLUMNS",
-                        "startIndex": 0,
-                        "endIndex": num_cols,
-                    }
-                }
-            },
-            # 5. Row height 22px
-            {
-                "updateDimensionProperties": {
-                    "range": {
-                        "sheetId": tab_id,
-                        "dimension": "ROWS",
-                        "startIndex": 0,
-                        "endIndex": num_rows + 1,
-                    },
-                    "properties": {"pixelSize": 22},
-                    "fields": "pixelSize",
-                }
-            },
-            # 6. Data rows: vertically centred, font 9
-            {
-                "repeatCell": {
+                },
+                "fields": "userEnteredFormat",
+            }
+        }])
+
+        # 3. Alternating row banding
+        _batch(self.sheets, self.sheet_id, [{
+            "addBanding": {
+                "bandedRange": {
                     "range": {
                         "sheetId": tab_id,
                         "startRowIndex": 1, "endRowIndex": num_rows + 1,
                         "startColumnIndex": 0, "endColumnIndex": num_cols,
                     },
-                    "cell": {
-                        "userEnteredFormat": {
-                            "verticalAlignment": "MIDDLE",
-                            "textFormat": {"fontSize": 9},
-                            "wrapStrategy": "CLIP",
-                        }
+                    "rowProperties": {
+                        "firstBandColor": {"red": 1.0, "green": 1.0, "blue": 1.0},
+                        "secondBandColor": {"red": 0.91, "green": 0.95, "blue": 0.99},
                     },
-                    "fields": "userEnteredFormat",
                 }
-            },
-        ]
-        self.sheets.spreadsheets().batchUpdate(
-            spreadsheetId=self.sheet_id, body={"requests": requests}
-        ).execute()
+            }
+        }])
+
+        # 4. Auto-resize columns
+        _batch(self.sheets, self.sheet_id, [{
+            "autoResizeDimensions": {
+                "dimensions": {
+                    "sheetId": tab_id,
+                    "dimension": "COLUMNS",
+                    "startIndex": 0,
+                    "endIndex": num_cols,
+                }
+            }
+        }])
+
+        # 5. Row height 22px
+        _batch(self.sheets, self.sheet_id, [{
+            "updateDimensionProperties": {
+                "range": {
+                    "sheetId": tab_id,
+                    "dimension": "ROWS",
+                    "startIndex": 0,
+                    "endIndex": num_rows + 1,
+                },
+                "properties": {"pixelSize": 22},
+                "fields": "pixelSize",
+            }
+        }])
+
+        # 6. Data rows: font 9, vertically centred
+        _batch(self.sheets, self.sheet_id, [{
+            "repeatCell": {
+                "range": {
+                    "sheetId": tab_id,
+                    "startRowIndex": 1, "endRowIndex": num_rows + 1,
+                    "startColumnIndex": 0, "endColumnIndex": num_cols,
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "verticalAlignment": "MIDDLE",
+                        "textFormat": {"fontSize": 9},
+                        "wrapStrategy": "CLIP",
+                    }
+                },
+                "fields": "userEnteredFormat",
+            }
+        }])
 
     def write(self, records: list[dict]):
         """Clear the sheet tab, write header + all records, then format."""
