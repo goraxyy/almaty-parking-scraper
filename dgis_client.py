@@ -14,7 +14,7 @@ from config import cfg
 log = logging.getLogger(__name__)
 
 BASE_URL = "https://catalog.api.2gis.com/3.0/items"
-CITY_ID = "159"  # Almaty
+REGION_ID = "67"  # Almaty region_id from v2 region search
 
 # All search terms that surface parking lots in 2GIS Almaty.
 # Multiple terms maximise coverage within the demo key page cap.
@@ -58,7 +58,7 @@ class DGisClient:
         self._throttle()
         params = {
             "q": query,
-            "city_id": CITY_ID,
+            "city_id": REGION_ID,
             "page": page,
             "page_size": 10,
             "fields": (
