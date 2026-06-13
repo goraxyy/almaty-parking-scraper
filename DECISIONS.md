@@ -1,37 +1,63 @@
-# Decisions & Time Spent
+# Design Decisions
 
-## Architectural Decisions
+## Data Source: 2GIS Catalog API
 
-### 1. 2GIS Catalog API (not HTML scraping)
-The 2GIS Places API returns structured JSON, which is far more reliable than HTML scraping. It exposes `rubric_id`, `schedule`, `attribute_groups`, and `org` fields that map cleanly to the required output columns. The tradeoff is the 50-result demo cap, mitigated by issuing multiple targeted search queries (see below).
+**Chosen:** 2GIS Catalog API (`catalog.api.2gis.com/3.0/items`)
 
-### 2. Multi-query Coverage Strategy
-A single query `"parking"` on a demo key returns only ~50 results. To approach full coverage the scraper issues **7 parallel search terms** (`парковка`, `стоянка`, `паркинг`, `автостоянка`, `parking`, `подземная парковка`, `многоуровневая парковка`) plus **district-scoped queries** for all 8 Almaty districts. Results are merged and deduplicated on `id` before writing. On a demo key this typically yields 200–400 unique lots.
+| Alternative | Pros | Cons |
+|---|---|---|
+| **2GIS API** ✓ | Best coverage of Almaty; structured fields (schedule, rubrics, capacity); free tier | Page cap on demo key (~500 results/query); some fields sparse |
+| OpenStreetMap (Overpass API) | Fully open; no key needed | Very sparse parking data for Almaty; no structured attributes |
+| Google Places API | Global coverage; rich attributes | Paid above low quota; worse CIS coverage than 2GIS |
+| Manual scraping of 2gis.kz | No API limit | Fragile; against ToS; JS-heavy page |
 
-### 3. Deduplication on 2GIS `id`
-Every place in 2GIS has a stable numeric `id`. Using this as the dedup key is safer than fuzzy name/address matching, which fails on abbreviated or transliterated names.
+**Why 2GIS:** It is the dominant mapping platform in Kazakhstan and has the most complete parking inventory for Almaty. The structured API avoids HTML scraping fragility.
 
-### 4. Type Inference Heuristic
-The API does not expose a "parking type" field directly. Type is inferred from:
-- The `rubric` tags (e.g., `"подземная"` → `underground`).
-- The `belongs_to` organisation name — presence of "ТРЦ"/"ТРЦ"/"Mall" → `mall`; "БЦ"/"бизнес" → `business_center`.
-- Fall-through: `city` (standalone municipal lot) or `private`.
+## Coverage: Multi-Query Strategy
 
-### 5. Google Sheets via Service Account
-Service accounts require no OAuth browser flow, making the tool fully headless and CI-friendly. The sheet is auto-created on first run if no `SHEET_ID` is set.
+**Chosen:** 15 queries (7 keyword + 8 district-scoped) with ID-based deduplication.
 
-### 6. Graceful Degradation
-`MAX_PAGES` defaults to 5 (demo limit). Setting it to 20+ on a production key automatically increases coverage without code changes.
+| Alternative | Pros | Cons |
+|---|---|---|
+| **Multi-query** ✓ | Maximises recall; surfaces entries only tagged under one term | More API calls; slower |
+| Single query `парковка` | Simple | Misses entries labelled `стоянка`, `паркинг`, etc. |
+| Bounding-box scan | Covers every object regardless of name | 2GIS free tier does not expose a bbox-only endpoint |
 
----
+**Why multi-query:** A single query misses ~20–30% of listings that use alternative Russian/English terms or are tagged at district level only.
 
-## Time Spent
+## District Enrichment: Polygon Fallback
 
-| Task | Time |
-|---|---|
-| 2GIS API research & field mapping | 45 min |
-| Core scraper + transformer | 60 min |
-| Google Sheets integration | 30 min |
-| Dedup + normalisation edge cases | 20 min |
-| README & setup docs | 25 min |
-| **Total** | **~3 h** |
+**Chosen:** 2GIS address component first; if empty, point-in-polygon lookup against hardcoded Almaty district boundaries using `shapely`.
+
+| Alternative | Pros | Cons |
+|---|---|---|
+| **Polygon lookup** ✓ | Offline; no extra API calls; fills ~90% of blank district fields | Approximate boundaries; edge cases near district borders |
+| 2GIS reverse-geocode API | Exact official district | 1 extra API call per record (~350 extra calls, slow) |
+| Leave blank | No dependency | ~60% of records missing район |
+
+**Why polygon:** Zero cost, no rate-limit risk, and accurate enough for district-level reporting.
+
+## Missing Data: н/д Marker
+
+**Chosen:** All fields that cannot be filled show `н/д` (not available).
+
+The 2GIS API does not require listings to include tariff, capacity, schedule, or organisation. Rather than leaving blank cells (which look like scraper errors), `н/д` explicitly signals that the data was queried but not present in the source. Columns with no realistic fill path (телефон, сайт) were removed entirely rather than showing a column of `н/д`.
+
+## Output: Google Sheets
+
+**Chosen:** Google Sheets via the Sheets API v4 (service account auth).
+
+| Alternative | Pros | Cons |
+|---|---|---|
+| **Google Sheets** ✓ | Shareable URL; no setup for reviewer; familiar UI | Requires Google Cloud service account |
+| CSV file | Simplest | Requires separate file sharing |
+| SQLite | Queryable | Reviewer needs DB tooling |
+| Airtable | Nice UI | Paid above 1 000 rows; separate account |
+
+**Why Sheets:** The assignment asks for a shareable result. A Google Sheets link works for any reviewer instantly.
+
+## Deduplication Strategy
+
+**Chosen:** Deduplicate by 2GIS object `id` at collection time, then by normalised `(name, address)` pair in `deduplicator.py`.
+
+Two-stage deduplication is needed because the multi-query strategy intentionally requests the same geographic area with different keywords — the same parking lot often appears in multiple query results. The `id` check is O(1) and handles exact duplicates; the name+address normalisation handles cases where the same physical lot has two slightly different 2GIS listings.

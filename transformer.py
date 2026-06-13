@@ -56,22 +56,6 @@ def _format_schedule(schedule: dict) -> str:
     return "; ".join(parts) if parts else NA
 
 
-def _extract_contacts(contact_groups: list) -> tuple[str, str]:
-    phones, websites = [], []
-    for group in contact_groups or []:
-        for contact in group.get("contacts", []):
-            ctype = contact.get("type", "")
-            value = contact.get("value", "")
-            if ctype == "phone" and value:
-                phones.append(value)
-            elif ctype in ("website", "url") and value:
-                websites.append(value)
-    return (
-        ", ".join(phones[:2]) or NA,
-        websites[0] if websites else NA,
-    )
-
-
 def _extract_capacity(item: dict) -> str:
     cap = item.get("capacity")
     if not cap:
@@ -146,12 +130,10 @@ def transform(item: dict) -> dict:
     point = item.get("point") or {}
     address_obj = item.get("address") or {}
     schedule = item.get("schedule") or {}
-    contacts = item.get("contact_groups") or []
     org = item.get("org") or {}
     org_name = org.get("name") or ""
 
     tariff, paid = _extract_tariff_and_paid(item)
-    phone, website = _extract_contacts(contacts)
     capacity = _extract_capacity(item)
     dgis_url = _build_url(item)
 
@@ -189,8 +171,6 @@ def transform(item: dict) -> dict:
         "тип": parking_type,
         "объект": org_name_out,
         "часы_работы": _format_schedule(schedule),
-        "телефон": phone,
-        "сайт": website,
         "район": district,
         "дата_сбора": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
@@ -199,11 +179,11 @@ def transform(item: dict) -> dict:
 HEADERS = [
     "id", "название", "адрес", "координаты", "ссылка_2гис",
     "платная", "тариф", "мест_всего", "тип", "объект",
-    "часы_работы", "телефон", "сайт", "район", "дата_сбора",
+    "часы_работы", "район", "дата_сбора",
 ]
 
 HEADER_LABELS = [
     "ID", "Название", "Адрес", "Координаты", "Ссылка на 2ГИС",
     "Платная?", "Тариф", "Мест (всего)", "Тип", "Объект / организация",
-    "Часы работы", "Телефон", "Сайт", "Район", "Дата сбора",
+    "Часы работы", "Район", "Дата сбора",
 ]

@@ -42,11 +42,10 @@ def main():
     log.info("After deduplication: %d unique records.", len(records))
 
     # Step 4: Filter out garbage rows (no name AND no address)
-    # Keys are Russian after transformer rename
-    records = [r for r in records if r.get("название") or r.get("адрес")]
+    records = [r for r in records if r.get("название") != "н/д" or r.get("адрес") != "н/д"]
     log.info("After garbage filter: %d records.", len(records))
 
-    # Step 5: Sort by district then name for readability
+    # Step 5: Sort by district then name
     records.sort(key=lambda r: (r.get("район", ""), r.get("название", "")))
 
     # Step 6: Write to Google Sheets
