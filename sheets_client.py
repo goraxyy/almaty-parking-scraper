@@ -21,7 +21,6 @@ TOKEN_FILE = "token.json"
 
 
 def _get_credentials() -> Credentials:
-    """Return valid credentials, refreshing or running the browser flow as needed."""
     creds = None
     if os.path.exists(TOKEN_FILE):
         creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
@@ -57,9 +56,7 @@ class SheetsClient:
             .execute()
         )
         sheet_id = result["spreadsheetId"]
-        log.info(
-            "Sheet created: https://docs.google.com/spreadsheets/d/%s", sheet_id
-        )
+        log.info("Sheet created: https://docs.google.com/spreadsheets/d/%s", sheet_id)
         self.drive.permissions().create(
             fileId=sheet_id,
             body={"type": "anyone", "role": "reader"},
@@ -76,15 +73,38 @@ class SheetsClient:
         for s in meta.get("sheets", []):
             if s["properties"]["title"] == cfg.SHEET_NAME:
                 return s["properties"]["sheetId"]
-        # Tab missing — create it
         resp = self.sheets.spreadsheets().batchUpdate(
             spreadsheetId=self.sheet_id,
             body={"requests": [{"addSheet": {"properties": {"title": cfg.SHEET_NAME}}}]},
         ).execute()
         return resp["replies"][0]["addSheet"]["properties"]["sheetId"]
 
+    def _remove_bandings(self, tab_id: int):
+        """Delete any existing banded ranges on this tab (prevents 500 on re-run)."""
+        meta = (
+            self.sheets.spreadsheets()
+            .get(spreadsheetId=self.sheet_id)
+            .execute()
+        )
+        for s in meta.get("sheets", []):
+            if s["properties"]["sheetId"] == tab_id:
+                banded = s.get("bandedRanges", [])
+                if banded:
+                    requests = [
+                        {"deleteBanding": {"bandedRangeId": b["bandedRangeId"]}}
+                        for b in banded
+                    ]
+                    self.sheets.spreadsheets().batchUpdate(
+                        spreadsheetId=self.sheet_id,
+                        body={"requests": requests},
+                    ).execute()
+                break
+
     def _apply_formatting(self, tab_id: int, num_rows: int):
         """Apply header colours, freeze, auto-resize, alternating row shading."""
+        # Must remove old banding first or Google returns 500 on addBanding
+        self._remove_bandings(tab_id)
+
         num_cols = len(HEADERS)
         requests = [
             # 1. Freeze row 1
@@ -121,7 +141,7 @@ class SheetsClient:
                     "fields": "userEnteredFormat",
                 }
             },
-            # 3. Alternating row shading for data rows (light blue every other row)
+            # 3. Alternating row shading (white / light blue)
             {
                 "addBanding": {
                     "bandedRange": {
@@ -131,14 +151,13 @@ class SheetsClient:
                             "startColumnIndex": 0, "endColumnIndex": num_cols,
                         },
                         "rowProperties": {
-                            "headerColor": {"red": 0.13, "green": 0.29, "blue": 0.45},
                             "firstBandColor": {"red": 1.0, "green": 1.0, "blue": 1.0},
                             "secondBandColor": {"red": 0.91, "green": 0.95, "blue": 0.99},
                         },
                     }
                 }
             },
-            # 4. Auto-resize all columns to fit content
+            # 4. Auto-resize all columns
             {
                 "autoResizeDimensions": {
                     "dimensions": {
@@ -149,7 +168,7 @@ class SheetsClient:
                     }
                 }
             },
-            # 5. Set row height to 22px for compactness
+            # 5. Row height 22px
             {
                 "updateDimensionProperties": {
                     "range": {
@@ -162,7 +181,7 @@ class SheetsClient:
                     "fields": "pixelSize",
                 }
             },
-            # 6. Data rows: vertically centred, small font
+            # 6. Data rows: vertically centred, font 9
             {
                 "repeatCell": {
                     "range": {
@@ -194,7 +213,6 @@ class SheetsClient:
             spreadsheetId=self.sheet_id, range=range_name
         ).execute()
 
-        # First row = human-readable Russian labels
         rows = [HEADER_LABELS]
         for rec in records:
             rows.append([str(rec.get(h, "")) for h in HEADERS])
@@ -206,7 +224,6 @@ class SheetsClient:
             body={"values": rows},
         ).execute()
 
-        # Apply formatting after data is written
         self._apply_formatting(tab_id, len(records))
 
         log.info(
