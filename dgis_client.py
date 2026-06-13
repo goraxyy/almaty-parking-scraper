@@ -37,6 +37,15 @@ DISTRICTS = [
     "Турксибский район",
 ]
 
+# Explicit address sub-fields are required — "items.address" alone returns {}
+_FIELDS = (
+    "items.id,items.name,items.full_name,"
+    "items.address.name,items.address.components,"
+    "items.point,items.url,items.schedule,"
+    "items.rubrics,items.attribute_groups,items.capacity,"
+    "items.org"
+)
+
 
 class DGisClient:
     def __init__(self):
@@ -58,12 +67,7 @@ class DGisClient:
             "region_id": REGION_ID,
             "page": page,
             "page_size": 10,
-            "fields": (
-                "items.id,items.name,items.full_name,items.address,"
-                "items.point,items.url,items.schedule,"
-                "items.rubrics,items.attribute_groups,items.capacity,"
-                "items.org"
-            ),
+            "fields": _FIELDS,
             "key": cfg.DGIS_API_KEY,
         }
         resp = self.session.get(BASE_URL, params=params, timeout=15)
