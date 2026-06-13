@@ -3,8 +3,9 @@
 Strategy:
   Step 1 - Search queries collect item IDs (search endpoint returns minimal fields).
   Step 2 - byid in batches of 50 fetches full data (point, schedule, capacity, etc.).
-  Step 3 - Reverse geocode via Nominatim (OSM) for items missing address
+  Step 3 - Reverse geocode via Nominatim (OSM) for all items
            (2GIS free key does not return address fields).
+           Results are cached in geocache.json — re-runs skip already-geocoded coords.
 
 Docs: https://docs.2gis.com/en/api/search/places/overview
       https://nominatim.org/release-docs/latest/api/Reverse/
@@ -16,6 +17,7 @@ import time
 import requests
 
 from config import cfg
+from geocache import GeoCache
 
 log = logging.getLogger(__name__)
 
@@ -24,9 +26,8 @@ BYID_URL = "https://catalog.api.2gis.com/3.0/items/byid"
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
 REGION_ID = "67"  # Almaty
 
-# Nominatim ToS: max 1 request/second, must set a real User-Agent
 _NOMINATIM_HEADERS = {"User-Agent": "almaty-parking-scraper/1.0 (educational project)"}
-_NOMINATIM_DELAY = 1.1  # seconds between nominatim calls
+_NOMINATIM_DELAY = 1.1  # Nominatim ToS: max 1 req/sec
 
 SEARCH_QUERIES = [
     "парковка",
@@ -64,6 +65,7 @@ class DGisClient:
         self._delay = 1.0 / cfg.REQUESTS_PER_SECOND
         self._last_call = 0.0
         self._last_nominatim_call = 0.0
+        self._cache = GeoCache()
 
     def _throttle(self):
         elapsed = time.monotonic() - self._last_call
@@ -102,9 +104,14 @@ class DGisClient:
         resp.raise_for_status()
         return resp.json().get("result", {}).get("items", [])
 
-    def _reverse_geocode_nominatim(self, lat: float, lon: float) -> str:
-        """Return 'road, house_number' from Nominatim, or empty string on failure."""
+    def _reverse_geocode(self, lat: float, lon: float) -> str:
+        """Return address from cache, or fetch from Nominatim and cache it."""
+        cached = self._cache.get(lat, lon)
+        if cached is not None:
+            return cached
+
         self._throttle_nominatim()
+        addr_str = ""
         try:
             resp = requests.get(
                 NOMINATIM_URL,
@@ -118,19 +125,18 @@ class DGisClient:
             road = addr.get("road") or addr.get("pedestrian") or addr.get("path") or ""
             house = addr.get("house_number", "")
             if road and house:
-                return f"{road}, {house}"
-            if road:
-                return road
-            # last resort: trim city/country from display_name
-            display = data.get("display_name", "")
-            if display:
-                # display_name = "Street, District, City, Postcode, Country"
-                # return first two parts only
-                parts = [p.strip() for p in display.split(",")]
-                return ", ".join(parts[:2])
+                addr_str = f"{road}, {house}"
+            elif road:
+                addr_str = road
+            else:
+                parts = [p.strip() for p in data.get("display_name", "").split(",")]
+                addr_str = ", ".join(parts[:2])
         except Exception as exc:
             log.debug("Nominatim failed (%s, %s): %s", lat, lon, exc)
-        return ""
+
+        # Cache even empty results to avoid retrying failed coords
+        self._cache.set(lat, lon, addr_str)
+        return addr_str
 
     def _collect_ids(self) -> list[str]:
         seen: set[str] = set()
@@ -181,18 +187,28 @@ class DGisClient:
 
         log.info("Fetched full data for %d items.", len(all_items))
 
-        # Step 3: reverse geocode ALL items via Nominatim (2GIS key has no address access)
-        log.info("Reverse geocoding addresses via Nominatim (%d items)...", len(all_items))
+        # Step 3: reverse geocode via Nominatim (cached)
+        cache_hits = 0
+        api_calls = 0
         filled = 0
         for item in all_items:
             point = item.get("point") or {}
             lat, lon = point.get("lat"), point.get("lon")
             if not lat or not lon:
                 continue
-            addr_str = self._reverse_geocode_nominatim(lat, lon)
+            was_cached = self._cache.get(lat, lon) is not None
+            addr_str = self._reverse_geocode(lat, lon)
+            if was_cached:
+                cache_hits += 1
+            else:
+                api_calls += 1
             if addr_str:
                 item["address"] = {"name": addr_str}
                 filled += 1
 
-        log.info("Nominatim filled %d/%d addresses.", filled, len(all_items))
+        log.info(
+            "Geocoding done: %d filled | %d cache hits | %d Nominatim calls.",
+            filled, cache_hits, api_calls,
+        )
+        self._cache.save()
         return all_items

@@ -4,6 +4,9 @@ oauth_credentials.json
 token.json
 service_account.json
 
+# --- Cache (local only, do not commit) ---
+geocache.json
+
 # --- Python ---
 __pycache__/
 *.py[cod]
