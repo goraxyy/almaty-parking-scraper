@@ -45,10 +45,26 @@ def main():
     records = [r for r in records if r.get("название") != "н/д" or r.get("адрес") != "н/д"]
     log.info("After garbage filter: %d records.", len(records))
 
-    # Step 5: Sort by district then name
+    # Step 5: Enrich org phone numbers (1 API call per record with an org_id)
+    org_phone_cache: dict[str, str] = {}
+    enriched = 0
+    for r in records:
+        org_id = r.get("_org_id", "")
+        if not org_id:
+            r["телефон"] = "н/д"
+            continue
+        if org_id not in org_phone_cache:
+            org_phone_cache[org_id] = client.fetch_org_phone(org_id)
+        phone = org_phone_cache[org_id]
+        r["телефон"] = phone if phone else "н/д"
+        if phone:
+            enriched += 1
+    log.info("Org phone enrichment: %d/%d records filled.", enriched, len(records))
+
+    # Step 6: Sort by district then name
     records.sort(key=lambda r: (r.get("район", ""), r.get("название", "")))
 
-    # Step 6: Write to Google Sheets
+    # Step 7: Write to Google Sheets
     sheets = SheetsClient()
     sheets.write(records)
 

@@ -6,7 +6,6 @@ from typing import Any
 
 from district_lookup import lookup_district
 
-# Keywords used to infer parking type from name / organisation / rubrics.
 _MALL_KW = re.compile(
     r"\b(ТРЦ|ТРК|ТД|торг|mall|mega|MEGA|megalopolis|апорт|forum|esentai|dostyk)",
     re.IGNORECASE,
@@ -17,7 +16,7 @@ _PAID_KW = re.compile(r"(платн|оплат|pay|paid|тариф)", re.IGNOREC
 _FREE_KW = re.compile(r"(бесплатн|free|свободн)", re.IGNORECASE)
 _TARIFF_RE = re.compile(r"(\d[\d\s]*(?:₸|тг|tenge|руб)[^\n,;]{0,40})", re.IGNORECASE)
 
-NA = "н/д"  # Standard not-available marker used across all fields
+NA = "н/д"
 
 
 def _safe(d: dict, *keys, default=""):
@@ -30,7 +29,6 @@ def _safe(d: dict, *keys, default=""):
 
 
 def _na(value: str) -> str:
-    """Return value if non-empty, else NA marker."""
     return value if value and value.strip() else NA
 
 
@@ -69,13 +67,11 @@ def _extract_capacity(item: dict) -> str:
 def _extract_tariff_and_paid(item: dict) -> tuple[str, str]:
     tariff_text = ""
     paid_status = ""
-
     for group in item.get("attribute_groups", []) or []:
         for attr in group.get("attributes", []) or []:
             name = (attr.get("name") or "").lower()
             value = str(attr.get("value") or "")
             combined = f"{name} {value}"
-
             if "тариф" in name or "стоимость" in name or "цена" in name or "price" in name:
                 tariff_text = value
             if _PAID_KW.search(combined):
@@ -85,25 +81,20 @@ def _extract_tariff_and_paid(item: dict) -> tuple[str, str]:
             tariff_match = _TARIFF_RE.search(combined)
             if tariff_match and not tariff_text:
                 tariff_text = tariff_match.group(1).strip()
-
     name_str = item.get("name", "") or ""
     if not paid_status:
         if _FREE_KW.search(name_str):
             paid_status = "Бесплатная"
         elif _PAID_KW.search(name_str):
             paid_status = "Платная"
-
     return tariff_text or NA, paid_status or NA
 
 
 def _infer_type(item: dict, org_name: str) -> str:
     name = (item.get("name") or "").lower()
     full_name = (item.get("full_name") or "").lower()
-    rubrics = " ".join(
-        r.get("name", "") for r in (item.get("rubrics") or [])
-    ).lower()
+    rubrics = " ".join(r.get("name", "") for r in (item.get("rubrics") or [])).lower()
     combined = f"{name} {full_name} {rubrics} {org_name.lower()}"
-
     if _UNDERGROUND_KW.search(combined):
         return "Подземная"
     if _MALL_KW.search(combined):
@@ -132,6 +123,7 @@ def transform(item: dict) -> dict:
     schedule = item.get("schedule") or {}
     org = item.get("org") or {}
     org_name = org.get("name") or ""
+    org_id = str(org.get("id") or "")  # stored as _org_id, stripped before writing
 
     tariff, paid = _extract_tariff_and_paid(item)
     capacity = _extract_capacity(item)
@@ -141,7 +133,6 @@ def transform(item: dict) -> dict:
     lon = point.get("lon") or ""
     coords = f"{lat}, {lon}" if lat and lon else NA
 
-    # District: prefer 2GIS address component, fall back to polygon lookup
     address_components = address_obj.get("components") or []
     district = ""
     for comp in address_components:
@@ -155,35 +146,34 @@ def transform(item: dict) -> dict:
             district = ""
     district = district or NA
 
-    address_str = address_obj.get("name") or NA
-    org_name_out = org_name or NA
-    parking_type = _infer_type(item, org_name)
-
     return {
         "id": str(item.get("id", "")),
         "название": item.get("name") or NA,
-        "адрес": address_str,
+        "адрес": address_obj.get("name") or NA,
         "координаты": coords,
         "ссылка_2гис": dgis_url,
         "платная": paid,
         "тариф": tariff,
         "мест_всего": capacity,
-        "тип": parking_type,
-        "объект": org_name_out,
+        "тип": _infer_type(item, org_name),
+        "объект": org_name or NA,
         "часы_работы": _format_schedule(schedule),
+        "телефон": NA,           # placeholder; filled by scraper.py enrichment step
         "район": district,
         "дата_сбора": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        # Internal field — used for enrichment, NOT written to sheet
+        "_org_id": org_id,
     }
 
 
 HEADERS = [
     "id", "название", "адрес", "координаты", "ссылка_2гис",
     "платная", "тариф", "мест_всего", "тип", "объект",
-    "часы_работы", "район", "дата_сбора",
+    "часы_работы", "телефон", "район", "дата_сбора",
 ]
 
 HEADER_LABELS = [
     "ID", "Название", "Адрес", "Координаты", "Ссылка на 2ГИС",
     "Платная?", "Тариф", "Мест (всего)", "Тип", "Объект / организация",
-    "Часы работы", "Район", "Дата сбора",
+    "Часы работы", "Телефон", "Район", "Дата сбора",
 ]
