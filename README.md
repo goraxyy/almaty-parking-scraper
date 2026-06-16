@@ -15,16 +15,22 @@ Scrapes all parking lots in Almaty from the 2GIS Catalog API and writes a struct
 
 ## Setup
 
-### 1. Clone & install
+### 1. Clone
 
 ```bash
 git clone https://github.com/goraxyy/almaty-parking-scraper.git
 cd almaty-parking-scraper
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
 ```
 
-### 2. Keys
+### 2. Install dependencies
+
+```bash
+pip3 install requests python-dotenv numpy shapely cryptography requests-oauthlib google-auth-oauthlib google-api-python-client
+```
+
+> All packages in one command — avoids the slow `requirements.txt` resolver.
+
+### 3. Keys
 
 | Key | Where to get it |
 |---|---|
@@ -38,7 +44,7 @@ pip install -r requirements.txt
 3. Create **OAuth 2.0 credentials** (Desktop App) → download JSON
 4. Save as `oauth_credentials.json` in the project root
 
-### 3. Configure
+### 4. Configure
 
 ```bash
 cp .env.example .env
@@ -54,7 +60,7 @@ GOOGLE_OAUTH_JSON=oauth_credentials.json
 
 Leave `SHEET_ID` blank to auto-create a new Google Sheet on first run.
 
-### 4. Run
+### 5. Run
 
 ```bash
 python3 scraper.py
@@ -62,7 +68,7 @@ python3 scraper.py
 
 First run: ~2–3 min (geocoding all coordinates). Re-runs: ~30 sec (cache hits).
 
-To re-geocode from scratch, delete the cache first:
+To re-geocode from scratch:
 
 ```bash
 rm geocache.json && python3 scraper.py
@@ -71,4 +77,4 @@ rm geocache.json && python3 scraper.py
 ## Requirements
 
 - Python 3.9+
-- See `requirements.txt` for packages
+- See `requirements.txt` for full package list
