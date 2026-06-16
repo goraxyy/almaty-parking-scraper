@@ -1,10 +1,21 @@
-# Almaty Parking Scraper
+# almaty-parking-scraper
 
-Collects parking lot data across all 8 Almaty districts from the 2GIS Catalog API and writes a structured table to Google Sheets.
+Scrapes all parking lots in Almaty from the 2GIS Catalog API and writes a structured table to Google Sheets. Covers all 8 districts via 15 search queries, deduplicates by object ID, and reverse-geocodes coordinates via Yandex Geocoder (cached in `geocache.json`).
 
-## Quick Start (5 minutes)
+## What it does
 
-### 1. Clone and install
+1. **Collects IDs** — searches 2GIS for `парковка`, `стоянка`, `паркинг` + 8 district-scoped variants
+2. **Fetches full data** — batches of 50 via `byid` endpoint (name, coordinates, schedule, capacity, org)
+3. **Reverse-geocodes** — Yandex Geocoder for street addresses; results cached in `geocache.json`
+4. **Writes to Google Sheets** — creates the sheet automatically if `SHEET_ID` is blank
+
+## Output columns
+
+`ID` · `Название` · `Адрес` · `Координаты` · `Ссылка на 2ГИС` · `Платная?` · `Тариф` · `Мест (всего)` · `Тип` · `Объект / организация` · `Часы работы` · `Район` · `Дата сбора`
+
+## Setup
+
+### 1. Clone & install
 
 ```bash
 git clone https://github.com/goraxyy/almaty-parking-scraper.git
@@ -13,15 +24,19 @@ python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Get API keys
+### 2. Keys
 
-**2GIS key** — register at [https://dev.2gis.com](https://dev.2gis.com), create an app, copy the Catalog API key.
+| Key | Where to get it |
+|---|---|
+| `DGIS_API_KEY` | [dev.2gis.com](https://dev.2gis.com) — free, create an app |
+| `YANDEX_API_KEY` | [developer.tech.yandex.com](https://developer.tech.yandex.com) — free, 1000 req/day |
+| `GOOGLE_OAUTH_JSON` | Google Cloud Console — OAuth 2.0 Desktop App credentials JSON |
 
-**Google Sheets credentials**:
-1. Go to [Google Cloud Console](https://console.cloud.google.com/) → create a project
+**Google Sheets setup:**
+1. [Google Cloud Console](https://console.cloud.google.com/) — create a project
 2. Enable **Google Sheets API** and **Google Drive API**
-3. Create a **Service Account** → download the JSON key file
-4. Save it as `credentials.json` in the project root
+3. Create **OAuth 2.0 credentials** (Desktop App) → download JSON
+4. Save as `oauth_credentials.json` in the project root
 
 ### 3. Configure
 
@@ -29,12 +44,15 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Edit `.env`:
+Minimum required fields in `.env`:
 
 ```env
-DGIS_API_KEY=your_2gis_key_here
-GOOGLE_CREDENTIALS_PATH=credentials.json
+DGIS_API_KEY=your_2gis_key
+YANDEX_API_KEY=your_yandex_key
+GOOGLE_OAUTH_JSON=oauth_credentials.json
 ```
+
+Leave `SHEET_ID` blank to auto-create a new Google Sheet on first run.
 
 ### 4. Run
 
@@ -42,46 +60,15 @@ GOOGLE_CREDENTIALS_PATH=credentials.json
 python3 scraper.py
 ```
 
-Output:
+First run: ~2–3 min (geocoding all coordinates). Re-runs: ~30 sec (cache hits).
+
+To re-geocode from scratch, delete the cache first:
+
+```bash
+rm geocache.json && python3 scraper.py
 ```
-=== Almaty Parking Scraper ===
-...
-Done!  353 parking lots written.
-Sheet: https://docs.google.com/spreadsheets/d/...
-```
-
-The Google Sheet is created automatically and shared publicly (view-only).
-
-## Output Columns
-
-| Column | Description | Filled by |
-|---|---|---|
-| ID | 2GIS internal object ID | API |
-| Название | Parking name | API |
-| Адрес | Street address from 2GIS | API |
-| Координаты | lat, lon | API |
-| Ссылка на 2ГИС | Direct link to listing | API / constructed |
-| Платная? | Платная / Бесплатная / н/д | Inferred from attributes + name |
-| Тариф | Price text if listed | API attributes |
-| Мест (всего) | Capacity if listed | API |
-| Тип | Городская / ТРЦ / БЦ / Подземная / Частная | Inferred from name + rubrics |
-| Объект / организация | Parent building or org | API |
-| Часы работы | Schedule or 24/7 | API |
-| Район | Almaty district | API address component → polygon fallback |
-| Дата сбора | UTC timestamp of scrape run | Generated |
-
-`н/д` = data not available from 2GIS for this listing.
-
-## Coverage Strategy
-
-The scraper runs 15 search queries total:
-- 7 keyword queries: `парковка`, `стоянка`, `паркинг`, `автостоянка`, `parking`, `подземная парковка`, `многоуровневая парковка`
-- 8 district-scoped queries: `парковка <район>` for each Almaty district
-
-Results are deduplicated by 2GIS object ID before writing.
 
 ## Requirements
 
 - Python 3.9+
-- 2GIS Catalog API key (free tier)
-- Google Cloud service account with Sheets + Drive API enabled
+- See `requirements.txt` for packages
