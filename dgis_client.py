@@ -13,6 +13,7 @@ Docs: https://docs.2gis.com/en/api/search/places/overview
 
 import logging
 import time
+from typing import Dict, List
 
 import requests
 
@@ -92,7 +93,7 @@ class DGisClient:
         resp.raise_for_status()
         return resp.json()
 
-    def _fetch_byid_batch(self, ids: list[str]) -> list[dict]:
+    def _fetch_byid_batch(self, ids: List[str]) -> List[dict]:
         self._throttle()
         params = {
             "id": ",".join(ids),
@@ -148,9 +149,9 @@ class DGisClient:
         self._cache.set(lat, lon, addr_str)
         return addr_str
 
-    def _collect_ids(self) -> list[str]:
-        seen: set[str] = set()
-        ordered: list[str] = []
+    def _collect_ids(self) -> List[str]:
+        seen = set()  # type: ignore
+        ordered: List[str] = []
         queries = list(SEARCH_QUERIES)
         for district in DISTRICTS:
             queries.append(f"парковка {district}")
@@ -176,14 +177,14 @@ class DGisClient:
         log.info("Collected %d unique IDs.", len(ordered))
         return ordered
 
-    def collect_all(self) -> list[dict]:
+    def collect_all(self) -> List[dict]:
         # Step 1: IDs via search
         all_ids = self._collect_ids()
         if not all_ids:
             return []
 
         # Step 2: full data via byid in batches of 50
-        all_items: list[dict] = []
+        all_items: List[dict] = []
         batch_size = 50
         total_batches = (len(all_ids) + batch_size - 1) // batch_size
         for i in range(0, len(all_ids), batch_size):

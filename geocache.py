@@ -1,12 +1,13 @@
-"""Persistent cache for Nominatim reverse geocoding results.
+"""Persistent cache for reverse geocoding results.
 
 Stores results in geocache.json keyed by "lat,lon" (6 decimal places).
-This avoids re-calling Nominatim for the same coordinates on every run.
+This avoids re-calling the geocoder for the same coordinates on every run.
 """
 
 import json
 import logging
 from pathlib import Path
+from typing import Dict, Optional
 
 log = logging.getLogger(__name__)
 
@@ -20,7 +21,7 @@ def _key(lat: float, lon: float) -> str:
 
 class GeoCache:
     def __init__(self):
-        self._data: dict[str, str] = {}
+        self._data: Dict[str, str] = {}
         self._dirty = False
         self._load()
 
@@ -33,7 +34,7 @@ class GeoCache:
                 log.warning("Could not load geocache: %s", exc)
                 self._data = {}
 
-    def get(self, lat: float, lon: float) -> str | None:
+    def get(self, lat: float, lon: float) -> Optional[str]:
         """Return cached address or None if not cached."""
         return self._data.get(_key(lat, lon))
 
