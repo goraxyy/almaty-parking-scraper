@@ -18,6 +18,7 @@ def _require(key: str) -> str:
 
 class Config:
     DGIS_API_KEY: str = _require("DGIS_API_KEY")
+    YANDEX_API_KEY: str = _require("YANDEX_API_KEY")
     GOOGLE_OAUTH_JSON: str = os.getenv("GOOGLE_OAUTH_JSON", "oauth_credentials.json")
     SHEET_ID: str = os.getenv("SHEET_ID", "")
     SHEET_NAME: str = os.getenv("SHEET_NAME", "Parking Almaty")

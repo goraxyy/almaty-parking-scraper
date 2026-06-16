@@ -3,12 +3,12 @@
 Strategy:
   Step 1 - Search queries collect item IDs (search endpoint returns minimal fields).
   Step 2 - byid in batches of 50 fetches full data (point, schedule, capacity, etc.).
-  Step 3 - Reverse geocode via Nominatim (OSM) for all items
+  Step 3 - Reverse geocode via Yandex Geocoder for all items
            (2GIS free key does not return address fields).
            Results are cached in geocache.json — re-runs skip already-geocoded coords.
 
 Docs: https://docs.2gis.com/en/api/search/places/overview
-      https://nominatim.org/release-docs/latest/api/Reverse/
+      https://yandex.com/dev/geocode/doc/en/request
 """
 
 import logging
@@ -23,11 +23,10 @@ log = logging.getLogger(__name__)
 
 SEARCH_URL = "https://catalog.api.2gis.com/3.0/items"
 BYID_URL = "https://catalog.api.2gis.com/3.0/items/byid"
-NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
+YANDEX_GEOCODER_URL = "https://geocode-maps.yandex.ru/1.x/"
 REGION_ID = "67"  # Almaty
 
-_NOMINATIM_HEADERS = {"User-Agent": "almaty-parking-scraper/1.0 (educational project)"}
-_NOMINATIM_DELAY = 1.1  # Nominatim ToS: max 1 req/sec
+_YANDEX_DELAY = 0.1  # Yandex free tier: 1000/day, no hard per-second limit; be polite
 
 SEARCH_QUERIES = [
     "парковка",
@@ -64,7 +63,7 @@ class DGisClient:
         self.session.headers.update({"User-Agent": "almaty-parking-scraper/1.0"})
         self._delay = 1.0 / cfg.REQUESTS_PER_SECOND
         self._last_call = 0.0
-        self._last_nominatim_call = 0.0
+        self._last_yandex_call = 0.0
         self._cache = GeoCache()
 
     def _throttle(self):
@@ -73,11 +72,11 @@ class DGisClient:
             time.sleep(self._delay - elapsed)
         self._last_call = time.monotonic()
 
-    def _throttle_nominatim(self):
-        elapsed = time.monotonic() - self._last_nominatim_call
-        if elapsed < _NOMINATIM_DELAY:
-            time.sleep(_NOMINATIM_DELAY - elapsed)
-        self._last_nominatim_call = time.monotonic()
+    def _throttle_yandex(self):
+        elapsed = time.monotonic() - self._last_yandex_call
+        if elapsed < _YANDEX_DELAY:
+            time.sleep(_YANDEX_DELAY - elapsed)
+        self._last_yandex_call = time.monotonic()
 
     def _fetch_search_page(self, query: str, page: int) -> dict:
         self._throttle()
@@ -105,34 +104,45 @@ class DGisClient:
         return resp.json().get("result", {}).get("items", [])
 
     def _reverse_geocode(self, lat: float, lon: float) -> str:
-        """Return address from cache, or fetch from Nominatim and cache it."""
+        """Return address from cache, or fetch from Yandex Geocoder and cache it.
+
+        Yandex expects geocode=lon,lat (longitude first).
+        Address is extracted from:
+          response.GeoObjectCollection.featureMember[0]
+            .GeoObject.metaDataProperty.GeocoderMetaData.text
+        """
         cached = self._cache.get(lat, lon)
         if cached is not None:
             return cached
 
-        self._throttle_nominatim()
+        self._throttle_yandex()
         addr_str = ""
         try:
-            resp = requests.get(
-                NOMINATIM_URL,
-                params={"lat": lat, "lon": lon, "format": "json"},
-                headers=_NOMINATIM_HEADERS,
-                timeout=10,
-            )
+            params = {
+                "apikey": cfg.YANDEX_API_KEY,
+                "geocode": f"{lon},{lat}",  # Yandex: lon,lat order
+                "format": "json",
+                "results": 1,
+                "kind": "house",
+            }
+            resp = self.session.get(YANDEX_GEOCODER_URL, params=params, timeout=10)
             resp.raise_for_status()
             data = resp.json()
-            addr = data.get("address", {})
-            road = addr.get("road") or addr.get("pedestrian") or addr.get("path") or ""
-            house = addr.get("house_number", "")
-            if road and house:
-                addr_str = f"{road}, {house}"
-            elif road:
-                addr_str = road
-            else:
-                parts = [p.strip() for p in data.get("display_name", "").split(",")]
-                addr_str = ", ".join(parts[:2])
+            members = (
+                data.get("response", {})
+                .get("GeoObjectCollection", {})
+                .get("featureMember", [])
+            )
+            if members:
+                addr_str = (
+                    members[0]
+                    .get("GeoObject", {})
+                    .get("metaDataProperty", {})
+                    .get("GeocoderMetaData", {})
+                    .get("text", "")
+                )
         except Exception as exc:
-            log.debug("Nominatim failed (%s, %s): %s", lat, lon, exc)
+            log.debug("Yandex Geocoder failed (%s, %s): %s", lat, lon, exc)
 
         # Cache even empty results to avoid retrying failed coords
         self._cache.set(lat, lon, addr_str)
@@ -187,7 +197,7 @@ class DGisClient:
 
         log.info("Fetched full data for %d items.", len(all_items))
 
-        # Step 3: reverse geocode via Nominatim (cached)
+        # Step 3: reverse geocode via Yandex Geocoder (cached)
         cache_hits = 0
         api_calls = 0
         filled = 0
@@ -207,7 +217,7 @@ class DGisClient:
                 filled += 1
 
         log.info(
-            "Geocoding done: %d filled | %d cache hits | %d Nominatim calls.",
+            "Geocoding done: %d filled | %d cache hits | %d Yandex API calls.",
             filled, cache_hits, api_calls,
         )
         self._cache.save()
