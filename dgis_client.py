@@ -124,7 +124,7 @@ class DGisClient:
                 "geocode": f"{lon},{lat}",  # Yandex: lon,lat order
                 "format": "json",
                 "results": 1,
-                "kind": "house",
+                # kind=house removed — broader matching fills more empty addresses
             }
             resp = self.session.get(YANDEX_GEOCODER_URL, params=params, timeout=10)
             resp.raise_for_status()
