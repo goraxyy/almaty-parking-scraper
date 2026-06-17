@@ -25,40 +25,36 @@ cd almaty-parking-scraper
 ### 2. Install dependencies
 
 ```bash
-pip3 install requests python-dotenv numpy shapely cryptography requests-oauthlib google-auth-oauthlib google-api-python-client
+pip3 install -r requirements.txt
 ```
 
-> All packages in one command — avoids the slow `requirements.txt` resolver.
+### 3. Google Cloud credentials
 
-### 3. Keys
-
-| Key | Where to get it |
-|---|---|
-| `DGIS_API_KEY` | [dev.2gis.com](https://dev.2gis.com) — free, create an app |
-| `YANDEX_API_KEY` | [developer.tech.yandex.com](https://developer.tech.yandex.com) — free, 1000 req/day |
-| `GOOGLE_OAUTH_JSON` | Google Cloud Console — OAuth 2.0 Desktop App credentials JSON |
-
-**Google Sheets setup:**
-1. [Google Cloud Console](https://console.cloud.google.com/) — create a project
+1. Go to [Google Cloud Console](https://console.cloud.google.com/) and create a project
 2. Enable **Google Sheets API** and **Google Drive API**
-3. Create **OAuth 2.0 credentials** (Desktop App) → download JSON
-4. Save as `oauth_credentials.json` in the project root
+3. Go to **APIs & Services → Credentials** → create **OAuth 2.0 credentials** (Desktop App) → download the JSON
+4. Save it as `oauth_credentials.json` in the project root
 
-### 4. Configure
+> On the **first run**, a browser window will open for OAuth consent. After you approve, a `token.json` is saved locally and reused on subsequent runs. Both files are already listed in `.gitignore` — never commit them.
+
+### 4. Configure environment
 
 ```bash
 cp .env.example .env
 ```
 
-Minimum required fields in `.env`:
+Edit `.env` with your keys. All variables:
 
-```env
-DGIS_API_KEY=your_2gis_key
-YANDEX_API_KEY=your_yandex_key
-GOOGLE_OAUTH_JSON=oauth_credentials.json
-```
-
-Leave `SHEET_ID` blank to auto-create a new Google Sheet on first run.
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `DGIS_API_KEY` | ✅ | — | 2GIS API key — get one free at [dev.2gis.com](https://dev.2gis.com) |
+| `YANDEX_API_KEY` | ✅ | — | Yandex Geocoder key — free, 1000 req/day at [developer.tech.yandex.com](https://developer.tech.yandex.com) |
+| `GOOGLE_OAUTH_JSON` | ✅ | `oauth_credentials.json` | Path to the OAuth credentials JSON downloaded in Step 3 |
+| `SHEET_ID` | ❌ | *(blank)* | Existing Google Sheet ID to reuse; leave blank to auto-create a new sheet |
+| `SHEET_NAME` | ❌ | `Parking Almaty` | Tab name inside the Google Sheet |
+| `MAX_PAGES` | ❌ | `5` | Max pages fetched per search query (10 results/page). Free 2GIS keys support up to 5; production keys can be set to 20+ |
+| `REQUESTS_PER_SECOND` | ❌ | `2` | Rate limit for 2GIS API requests |
+| `LOG_LEVEL` | ❌ | `INFO` | Logging verbosity: `DEBUG` \| `INFO` \| `WARNING` \| `ERROR` |
 
 ### 5. Run
 
